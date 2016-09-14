@@ -151,6 +151,10 @@ func checkSuffix(fname string, sufs ...string) (string, error) {
 
 func getFnameNoSuffix(fname string) string {
 	ind := strings.LastIndex(fname, "/")
+	if ind == -1 {
+		fnameparts := strings.FieldsFunc(fname, suffixFieldsFunc)
+		return fnameparts[0]
+	}
 	fnameparts := strings.FieldsFunc(fname[ind:], suffixFieldsFunc)
 	return fnameparts[0]
 }
@@ -158,6 +162,9 @@ func getFnameNoSuffix(fname string) string {
 func getDir(fname string) string {
 	//fnameparts := strings.FieldsFunc(fname, dirFieldsFunc)
 	ind := strings.LastIndex(fname, "/")
+	if ind == -1 {
+		return "."
+	}
 	return fname[:ind]
 }
 
@@ -431,6 +438,9 @@ func main() {
 	}
 	if *outformat != "json" && *outformat != "pb" {
 		errx(errors.New("output formats can be either json or pb"))
+	}
+	if *outdir == "" {
+		*outdir = "./"
 	}
 	//fmt.Printf("ranges:%+v\n", franges)
 	if len(flag.Args()) < 2 {

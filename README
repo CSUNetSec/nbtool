@@ -8,6 +8,9 @@ it handles both netbrane v1 and v2 common format files.
 
 usage:
 
+unzip a compressed nb file
+	./nbtool unzip foo.nb
+
 
 Copyright (c) 2016, dsp@2f30.org
 All rights reserved.
