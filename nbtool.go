@@ -401,8 +401,8 @@ func extract(cmd workercommand) {
 					}
 				}
 			} else {
-				errlen := binary.Write(outdesc, binary.BigEndian, len(nbscanner.Bytes())) //writing the length in big endian
-				errbytes := binary.Write(outdesc, binary.BigEndian, nbscanner.Bytes())    //writing the data in big endian
+				errlen := binary.Write(outdesc, binary.BigEndian, uint32(sz))          //writing the length in big endian
+				errbytes := binary.Write(outdesc, binary.BigEndian, nbscanner.Bytes()) //writing the data in big endian
 				if err != nil || errbytes != nil {
 					fmt.Printf("write pb len error:%s\nwrite pb error:%s", errlen, errbytes)
 				}
