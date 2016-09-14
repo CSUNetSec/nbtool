@@ -11,6 +11,21 @@ usage:
 unzip a compressed nb file
 	./nbtool unzip foo.nb
 
+count the number of entries in a file
+	./nbtool count foo.unb
+
+extract the first entry in a file as protobuf
+	./nbtool -outformat pb -ranges 1 extract foo.unb
+
+extract the first entry as protobuf from every file in the list of arguments (works in parallel)
+	./nbtool -outformat pb -ranges 1:1:1 extract foo1.unb foo2.unb foo3.unb
+
+extract ranges of entries as json from a file
+	./nbtool -outformat json -ranges 1-10,20-30,40-45 extract foo.unb
+
+extract different ranges as json on multiple files (works in parallel)
+	./nbtool -outformat json -ranges 1-10,20-30:2-3,40-55 extract foo1.unb foo2.unb
+
 
 Copyright (c) 2016, dsp@2f30.org
 All rights reserved.
