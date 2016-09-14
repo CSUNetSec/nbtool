@@ -445,9 +445,6 @@ func main() {
 	wg.Add(*workers)
 	switch flag.Arg(0) {
 	case "unzip":
-		if *outformat != "" && *outformat != "unb" {
-			errx(errors.New("output format should be unb"))
-		}
 		*outformat = "unb"
 		workrchan = genworkers(*workers, unzip, &wg)
 		for i, fname := range flag.Args()[1:] {
