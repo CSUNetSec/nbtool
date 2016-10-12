@@ -13,6 +13,7 @@ import (
 	"io"
 	pb "nbtool/netbrane-shared/capture/flow-records"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -121,13 +122,6 @@ func errx(e error, fds ...io.Closer) {
 	os.Exit(-1)
 }
 
-func suffixFieldsFunc(c rune) bool {
-	if c == '.' {
-		return true
-	}
-	return false
-}
-
 func dirFieldsFunc(c rune) bool {
 	if c == '/' {
 		return true
@@ -137,12 +131,13 @@ func dirFieldsFunc(c rune) bool {
 
 //chech that fname has a suffix that is one of the variadic string arguments.
 func checkSuffix(fname string, sufs ...string) (string, error) {
-	strarr := strings.FieldsFunc(fname, suffixFieldsFunc)
-	if len(strarr) < 2 {
+	ext := filepath.Ext(fname)
+	if ext == "" {
 		return "", errors.New("no suffix detected.")
 	}
 	for _, suf := range sufs {
-		if strarr[1] == suf {
+		//we ignore the dot cause filepath.Ext returns it with the dot
+		if ext[1:] == suf {
 			return suf, nil
 		}
 	}
@@ -150,17 +145,14 @@ func checkSuffix(fname string, sufs ...string) (string, error) {
 }
 
 func getFnameNoSuffix(fname string) string {
-	ind := strings.LastIndex(fname, "/")
-	if ind == -1 {
-		fnameparts := strings.FieldsFunc(fname, suffixFieldsFunc)
-		return fnameparts[0]
+	basename := filepath.Base(fname)
+	if ind := strings.LastIndex(basename, "."); ind != -1 {
+		return basename[:ind]
 	}
-	fnameparts := strings.FieldsFunc(fname[ind:], suffixFieldsFunc)
-	return fnameparts[0]
+	return basename
 }
 
 func getDir(fname string) string {
-	//fnameparts := strings.FieldsFunc(fname, dirFieldsFunc)
 	ind := strings.LastIndex(fname, "/")
 	if ind == -1 {
 		return "."
