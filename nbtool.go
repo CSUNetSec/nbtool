@@ -8,10 +8,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	pb "github.com/CSUNetSec/netsec-protobufs/netbrane"
+	pb "github.com/CSUNetSec/nbtool/pb"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
@@ -33,6 +34,7 @@ type ReadSeekCloser interface {
 
 type recrange struct {
 	start, end int
+	all        bool
 }
 
 type recranges []recrange
@@ -45,10 +47,19 @@ type workercommand struct {
 	indexfile string
 	outtype   string
 	ranges    recranges
+	filterexp []filtercommand
+}
+
+type filtercommand struct {
+	sip, dip     net.IP
+	sport, dport int
 }
 
 func (r recranges) inranges(i int) bool {
 	for _, ran := range r {
+		if ran.all {
+			return true
+		}
 		if i >= ran.start && i <= ran.end {
 			return true
 		}
@@ -70,22 +81,27 @@ func (f *filerecranges) Set(val string) error {
 			minmax := strings.Split(r, "-")
 			switch len(minmax) {
 			case 1:
+				if minmax[0] == "ALL" { //handle the case that we want all entries in a file
+					*ran = append(*ran, recrange{all: true})
+					goto nextfile
+				}
 				num, err := strconv.Atoi(minmax[0])
 				if err != nil {
 					return err
 				}
-				*ran = append(*ran, recrange{start: num, end: num})
+				*ran = append(*ran, recrange{start: num, end: num, all: false})
 			case 2:
 				num1, err1 := strconv.Atoi(minmax[0])
 				num2, err2 := strconv.Atoi(minmax[1])
 				if err1 != nil || err2 != nil {
 					return errors.New(fmt.Sprintf("error: %s,%s", err1, err2))
 				}
-				*ran = append(*ran, recrange{start: num1, end: num2})
+				*ran = append(*ran, recrange{start: num1, end: num2, all: false})
 			default:
-				return errors.New("ranges have to be either single numbers or in the form number1-number2")
+				return errors.New("ranges have to be either single numbers or in the form number1-number2 or the string ALL")
 			}
 		}
+	nextfile:
 		*f = append(*f, *ran)
 	}
 	return nil
@@ -170,7 +186,7 @@ func fileExists(fname string) bool {
 func usage() string {
 	return `usage:
 	` + os.Args[0] + ` [flags] command filename... 
-	command can be one of [unzip, extract, count]
+	command can be one of [unzip, extract, count, filter]
 	filenames must be .nb netbrane flowspec files or .unb unzipped flowspec files`
 }
 
@@ -373,6 +389,7 @@ func extract(cmd workercommand) {
 		i := 0
 		totsz := 0
 		record := pb.CaptureRecordUnion{}
+	rescan:
 		for nbscanner.Scan() {
 			i++
 			if cmd.ranges == nil || !cmd.ranges.inranges(i) { // ranges are not in the command, or not in range
@@ -380,6 +397,39 @@ func extract(cmd workercommand) {
 			}
 			sz := len(nbscanner.Bytes())
 			totsz += sz
+			if len(cmd.filterexp) != 0 { //he have been called from filter. see if it matches
+				err := proto.Unmarshal(nbscanner.Bytes(), &record)
+				if err != nil {
+					fmt.Printf("bytes->pb error:%s\n", err)
+					continue
+				}
+				if record.RecordType != nil && *record.RecordType != pb.CaptureRecordUnion_FLOW_RECORD {
+					fmt.Printf("error: filtering can be done only on flows for now. i found:%v\n", record.RecordType)
+					continue rescan
+				}
+				fr := record.GetFlowRecord()
+				if fr == nil {
+					fmt.Printf("error: null flowrecord", record.RecordType)
+					continue rescan
+				}
+				sourceflow, destflow := fr.GetSource(), fr.GetDestination()
+				if sourceflow == nil || destflow == nil {
+					fmt.Printf("error: null source/dest flows", record.RecordType)
+					continue rescan
+				}
+				for _, exp := range cmd.filterexp {
+					switch {
+					case exp.dport != 0:
+						if int(destflow.GetPort()) != exp.dport {
+							continue rescan
+						}
+					case exp.sport != 0:
+						if int(sourceflow.GetPort()) != exp.sport {
+							continue rescan
+						}
+					}
+				} // if we are here we matched all expressions so we extract it
+			}
 			if jsonout == true {
 				err := proto.Unmarshal(nbscanner.Bytes(), &record)
 				if err != nil {
@@ -455,7 +505,6 @@ func main() {
 	case "extract":
 		workrchan = genworkers(*workers, extract, &wg)
 		for i, fname := range flag.Args()[1:] {
-			workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir}
 			if i < len(franges) {
 				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, ranges: franges[i]}
 			} else {
@@ -466,6 +515,31 @@ func main() {
 		workrchan = genworkers(*workers, count, &wg)
 		for i, fname := range flag.Args()[1:] {
 			workrchan[i%*workers] <- workercommand{infile: fname}
+		}
+	case "filter":
+		workrchan = genworkers(*workers, extract, &wg)
+		if len(flag.Args()) < 4 {
+			fmt.Printf("error: filter [sport|dport] num\n")
+			break
+		}
+		fc := filtercommand{}
+		port, err := strconv.Atoi(flag.Arg(2))
+		if err != nil {
+			fmt.Printf("error: %s\n", err)
+			break
+		}
+		switch flag.Arg(1) {
+		case "sport":
+			fc.sport = port
+		case "dport":
+			fc.dport = port
+		}
+		for i, fname := range flag.Args()[3:] {
+			if i < len(franges) {
+				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, ranges: franges[i], filterexp: []filtercommand{fc}}
+			} else {
+				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, filterexp: []filtercommand{fc}}
+			}
 		}
 	default:
 		fmt.Printf("%s \nflags are:\n", usage())
