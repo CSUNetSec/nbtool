@@ -160,6 +160,19 @@ func checkSuffix(fname string, sufs ...string) (string, error) {
 	return "", errors.New("suffix of filename is not  in " + fmt.Sprintf("%v", sufs))
 }
 
+func parsePorts(a string) (ret []int, err error) {
+	ports := strings.Split(a, ",")
+	var p int
+	for i := range ports {
+		p, err = strconv.Atoi(ports[i])
+		if err != nil {
+			return
+		}
+		ret = append(ret, p)
+	}
+	return
+}
+
 func getFnameNoSuffix(fname string) string {
 	basename := filepath.Base(fname)
 	if ind := strings.LastIndex(basename, "."); ind != -1 {
@@ -417,19 +430,26 @@ func extract(cmd workercommand) {
 					fmt.Printf("error: null source/dest flows", record.RecordType)
 					continue rescan
 				}
+				pass := true // default allow
 				for _, exp := range cmd.filterexp {
+					//fmt.Printf("examining :%v\n", exp)
+					pass = false //if they are expressions they need to be matched
 					switch {
 					case exp.dport != 0:
-						if int(destflow.GetPort()) != exp.dport {
-							continue rescan
+						if int(destflow.GetPort()) == exp.dport {
+							goto pass
 						}
 					case exp.sport != 0:
-						if int(sourceflow.GetPort()) != exp.sport {
-							continue rescan
+						if int(sourceflow.GetPort()) == exp.sport {
+							goto pass
 						}
 					}
 				} // if we are here we matched all expressions so we extract it
+				if !pass {
+					continue rescan
+				}
 			}
+		pass:
 			if jsonout == true {
 				err := proto.Unmarshal(nbscanner.Bytes(), &record)
 				if err != nil {
@@ -522,23 +542,27 @@ func main() {
 			fmt.Printf("error: filter [sport|dport] num\n")
 			break
 		}
-		fc := filtercommand{}
-		port, err := strconv.Atoi(flag.Arg(2))
+		fcs := make([]filtercommand, 0)
+		ports, err := parsePorts(flag.Arg(2))
 		if err != nil {
 			fmt.Printf("error: %s\n", err)
 			break
 		}
 		switch flag.Arg(1) {
 		case "sport":
-			fc.sport = port
+			for _, p := range ports {
+				fcs = append(fcs, filtercommand{sport: p})
+			}
 		case "dport":
-			fc.dport = port
+			for _, p := range ports {
+				fcs = append(fcs, filtercommand{dport: p})
+			}
 		}
 		for i, fname := range flag.Args()[3:] {
 			if i < len(franges) {
-				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, ranges: franges[i], filterexp: []filtercommand{fc}}
+				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, ranges: franges[i], filterexp: fcs}
 			} else {
-				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, filterexp: []filtercommand{fc}}
+				workrchan[i%*workers] <- workercommand{infile: fname, outtype: *outformat, outdir: *outdir, filterexp: fcs}
 			}
 		}
 	default:
