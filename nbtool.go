@@ -50,6 +50,14 @@ type workercommand struct {
 	filterexp []filtercommand
 }
 
+type indexEntry struct {
+	sourcePort uint32
+	destPort   uint32
+	sourceIp   uint32
+	destIp     uint32
+	offset     uint64
+}
+
 type filtercommand struct {
 	sip, dip     net.IP
 	sport, dport int
@@ -199,7 +207,7 @@ func fileExists(fname string) bool {
 func usage() string {
 	return `usage:
 	` + os.Args[0] + ` [flags] command filename... 
-	command can be one of [unzip, extract, count, filter]
+	command can be one of [unzip, extract, count, filter, index]
 	filenames must be .nb netbrane flowspec files or .unb unzipped flowspec files`
 }
 
@@ -258,6 +266,94 @@ func count(cmd workercommand) {
 		}
 	}
 	fmt.Printf("File:%s [v2:%v] has :%d entries\n", fname, isv2, i)
+
+}
+
+func addr2uint32(addr []byte) (u uint32) {
+	u |= uint32(addr[0])
+	u |= uint32(addr[1]) << 8
+	u |= uint32(addr[2]) << 16
+	u |= uint32(addr[3]) << 24
+	return
+}
+
+func index(cmd workercommand) {
+	var (
+		indesc     *os.File
+		indexf     *os.File
+		err        error
+		numentries uint32
+		i          int
+		totsz      uint64
+	)
+	isv2 := false
+	fname := cmd.infile
+	indexfname := cmd.indexfile
+	_, err = checkSuffix(fname, "unb")
+	errx(err)
+	_, err = os.Stat(fname)
+	errx(err)
+	indesc, err = os.Open(fname)
+	errx(err)
+	defer indesc.Close()
+	errx(err)
+	indexf, err = os.Create(indexfname)
+	errx(err)
+	defer indexf.Close()
+	fi, err := os.Stat(fname)
+	errx(err)
+	flen := fi.Size()
+	if flen < 4 {
+		errx(errors.New("file length too small"))
+	}
+	//seeking to flen-4 to get number of entries if it's v2
+	indesc.Seek(flen-4, 0) //0 is io.SeekStart
+	binary.Read(indesc, binary.BigEndian, &numentries)
+	if isnbversion2(numentries, uint64(flen)) {
+		panic("indexing not supported in nbv2 files for now")
+	} else {
+		indesc.Seek(0, 0)
+		bufindesc := bufio.NewReader(indesc)
+		nbscanner := bufio.NewScanner(bufindesc)
+		scanbuffer := make([]byte, 2<<26) //an internal buffer for the large tokens (67M)
+		nbscanner.Buffer(scanbuffer, cap(scanbuffer))
+		nbscanner.Split(splitNbFlowRecord)
+		i = 0
+		record := pb.CaptureRecordUnion{}
+		ientry := indexEntry{}
+	rescan:
+		for nbscanner.Scan() {
+			i++
+			sz := uint64(len(nbscanner.Bytes()))
+			totsz += sz
+			err := proto.Unmarshal(nbscanner.Bytes(), &record)
+			if err != nil {
+				fmt.Printf("bytes->pb error:%s\n", err)
+				continue
+			}
+			if record.RecordType != nil && *record.RecordType != pb.CaptureRecordUnion_FLOW_RECORD {
+				fmt.Printf("error: filtering can be done only on flows for now. i found:%v\n", record.RecordType)
+				continue rescan
+			}
+			fr := record.GetFlowRecord()
+			if fr == nil {
+				fmt.Printf("error: null flowrecord", record.RecordType)
+				continue rescan
+			}
+			sourceflow, destflow := fr.GetSource(), fr.GetDestination()
+			if sourceflow == nil || destflow == nil {
+				fmt.Printf("error: null source/dest flows", record.RecordType)
+				continue rescan
+			}
+			ientry.destPort = uint32(destflow.GetPort())
+			ientry.sourcePort = uint32(sourceflow.GetPort())
+			ientry.destIp = uint32(addr2uint32(destflow.GetAddress().GetIpv4()))
+			ientry.sourceIp = uint32(addr2uint32(sourceflow.GetAddress().GetIpv4()))
+			ientry.offset = uint64(totsz - sz)
+			binary.Write(indexf, binary.BigEndian, ientry)
+		}
+	}
+	fmt.Printf("File:%s [v2:%v]. Wrote %d index entries on file:%s\n", fname, isv2, i, indexfname)
 
 }
 
@@ -535,6 +631,11 @@ func main() {
 		workrchan = genworkers(*workers, count, &wg)
 		for i, fname := range flag.Args()[1:] {
 			workrchan[i%*workers] <- workercommand{infile: fname}
+		}
+	case "index":
+		workrchan = genworkers(*workers, index, &wg)
+		for i, fname := range flag.Args()[1:] {
+			workrchan[i%*workers] <- workercommand{infile: fname, indexfile: fname + ".index"}
 		}
 	case "filter":
 		workrchan = genworkers(*workers, extract, &wg)
