@@ -23,6 +23,8 @@ package pb
 import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
 import math "math"
+import net "net"
+import jsonpb "github.com/golang/protobuf/jsonpb"
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
@@ -311,9 +313,27 @@ func (m *CaptureSpec) GetUsername() string {
 
 type IPAddressWrapper struct {
 	// must be at least one or the other
-	Ipv4             []byte `protobuf:"bytes,1,opt,name=ipv4" json:"ipv4,omitempty"`
-	Ipv6             []byte `protobuf:"bytes,2,opt,name=ipv6" json:"ipv6,omitempty"`
+	Ipv4             []byte `protobuf:"bytes,1,opt,name=ipv4" json:"ipv4,omitempty,string"`
+	Ipv6             []byte `protobuf:"bytes,2,opt,name=ipv6" json:"ipv6,omitempty,string"`
 	XXX_unrecognized []byte `json:"-"`
+}
+
+func (m *IPAddressWrapper) MyPrintIp() string {
+	var ip net.IP
+	if b := m.GetIpv4(); b != nil {
+		ip = net.IP(b)
+		//hack cause i don't want to go everywhere to say it's a string.
+		return fmt.Sprintf("\"%s\"", ip.String())
+	}
+	if b := m.GetIpv6(); b != nil {
+		ip = net.IP(b)
+		return fmt.Sprintf("\"%s\"", ip.String())
+	}
+	return fmt.Sprintf("\"%s\"", "unknown ip")
+}
+
+func (m *IPAddressWrapper) MarshalJSONPB(*jsonpb.Marshaler) ([]byte, error) {
+	return []byte(m.MyPrintIp()), nil
 }
 
 func (m *IPAddressWrapper) Reset()                    { *m = IPAddressWrapper{} }
