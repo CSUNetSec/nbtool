@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type nbFlowRecordIndex struct {
@@ -35,6 +37,15 @@ type ReadSeekCloser interface {
 type recrange struct {
 	start, end int
 	all        bool
+}
+
+//this encloses the marshaled pb to decorate it
+//with printable date strings and a bucket
+//which is for now set to be the minutes since epoch
+type DecoratedJson struct {
+	CaptureRecordStr string
+	Date             time.Time
+	Bucket           uint64
 }
 
 type recranges []recrange
@@ -547,6 +558,7 @@ func extract(cmd workercommand) {
 			}
 		pass:
 			if jsonout == true {
+				dj := DecoratedJson{}
 				err := proto.Unmarshal(nbscanner.Bytes(), &record)
 				if err != nil {
 					fmt.Printf("bytes->pb error:%s\n", err)
@@ -555,7 +567,15 @@ func extract(cmd workercommand) {
 					if err != nil {
 						fmt.Printf("pb->json error:%s\n", err)
 					} else {
-						fmt.Fprintf(outdesc, "%s\n", str)
+						dj.CaptureRecordStr = str
+						dj.Date = time.Unix(int64(record.GetTimestampSeconds()), int64(record.GetFlowRecord().GetTimestampNs()))
+						dj.Bucket = uint64(dj.Date.Sub(time.Unix(0, 0)).Minutes())
+						djstr, err := json.Marshal(dj)
+						if err != nil {
+							fmt.Printf("decoratedCapture->json error:%s\n", err)
+						} else {
+							fmt.Fprintf(outdesc, "%s\n", string(djstr))
+						}
 					}
 				}
 			} else {
